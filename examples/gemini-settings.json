@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "sqlite-lab": {
+      "command": "/ABSOLUTE/PATH/TO/.venv312/bin/python",
+      "args": ["/ABSOLUTE/PATH/TO/implementation/mcp_server.py"],
+      "cwd": "/ABSOLUTE/PATH/TO",
+      "timeout": 10000,
+      "trust": false
+    }
+  }
+}

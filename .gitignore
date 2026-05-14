@@ -1,0 +1,11 @@
+.codex-local/
+.mcp-local/
+.pytest_cache/
+.uv-cache/
+.venv/
+.venv*/
+__pycache__/
+*.py[cod]
+*.sqlite
+*.sqlite3
+.DS_Store

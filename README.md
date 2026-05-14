@@ -1,181 +1,289 @@
-# Lab: Build a Database MCP Server with FastMCP and SQLite
+# SQLite Lab MCP Server
 
-## Goal
-
-Build a Model Context Protocol (MCP) server using FastMCP that exposes a small database through:
+FastMCP server backed by SQLite for the Day 26 Track 3 MCP tool integration lab. It exposes the required MCP tools and schema resources:
 
 - `search`
 - `insert`
 - `aggregate`
-
-You must also expose the database schema as an MCP resource, test the server with Inspector or equivalent tooling, and show the server working from at least one MCP client.
-
-## Learning Outcomes
-
-By the end of this lab, students should be able to:
-
-- explain what MCP tools and resources are
-- build a FastMCP server in Python
-- connect FastMCP to a SQLite database
-- safely validate database requests before executing SQL
-- expose dynamic schema context through `@mcp.resource(...)`
-- test tool schemas, normal calls, and error responses
-- connect the server to an MCP client such as Claude Code, Codex, or Gemini CLI
-
-## Required Features
-
-### Part 1: MCP Server
-
-Implement a FastMCP server that exposes exactly these tool categories:
-
-1. `search`
-2. `insert`
-3. `aggregate`
-
-Your server may use SQLite for the main implementation. If you want to support PostgreSQL too, design the code so the database layer can be swapped later.
-
-### Part 2: Resource
-
-Expose database schema information as MCP resources:
-
-- one resource for the full database schema
-- one dynamic resource template for a single table schema
-
-Suggested URIs:
-
 - `schema://database`
 - `schema://table/{table_name}`
 
-### Part 3: Validation and Error Handling
+The implementation uses parameterized SQL values, validates table and column identifiers against SQLite metadata, and rejects unsupported operators, bad aggregate requests, unknown identifiers, and empty inserts.
 
-Your tools must reject unsafe or invalid requests:
+Bonus support is included for bearer-token auth on HTTP/SSE transports and a PostgreSQL adapter behind the same database interface.
 
-- unknown table names
-- unknown column names
-- unsupported filter operators
-- invalid aggregate requests
-- empty inserts
-
-Do not build SQL by blindly concatenating raw user input.
-
-### Part 4: Testing and Verification
-
-Verify all of the following:
-
-1. the server starts correctly
-2. the three tools are discoverable
-3. the schema resource is discoverable
-4. valid tool calls return useful results
-5. invalid tool calls return clear errors
-6. at least one MCP client can connect and use the server
-
-### Part 5: Demo Deliverables
-
-Prepare:
-
-- GitHub repository
-- setup instructions
-- tool descriptions
-- testing steps
-- at least one client configuration example
-- short demo video, around 2 minutes
-
-Inspector screenshots are recommended if you use MCP Inspector.
-
-## Suggested Project Structure
+## Project Structure
 
 ```text
 implementation/
-  db.py
-  init_db.py
-  mcp_server.py
-  verify_server.py
+  auth.py             # bearer-token middleware for HTTP/SSE demos
+  db.py               # SQLite adapter, validation, SQL construction
+  init_db.py          # reproducible schema and seed data
+  mcp_server.py       # FastMCP server, tools, resources
+  verify_server.py    # repeatable MCP smoke verification
+  start_inspector.sh  # MCP Inspector helper
   tests/
-    test_server.py
+    test_db.py        # automated behavior and safety tests
+examples/
+  claude.mcp.json
+  codex-config.toml
+  gemini-settings.json
+docs/
+  demo-transcript.md
 ```
 
-## Recommended Data Model
+## Requirements
 
-Use a small relational dataset so `search`, `insert`, and `aggregate` are easy to demo. Example:
+- Python 3.10 or newer
+- FastMCP
+- pytest for tests
+- Optional: Codex, Claude Code, Gemini CLI, or MCP Inspector for manual client checks
+- Optional: PostgreSQL plus `psycopg[binary]` for the PostgreSQL adapter
 
-- `students`
-- `courses`
-- `enrollments`
+Python 3.12 was used for local FastMCP verification.
 
-## Example Tasks to Demonstrate
+## Setup
 
-- search all students in cohort `A1`
-- insert a new student
-- count rows in a table
-- compute average score by cohort
-- read the full schema resource
-- read `schema://table/students`
-- show an invalid request, such as searching a missing table
+Using `uv`:
 
-## FastMCP and Inspector References
+```bash
+UV_CACHE_DIR=.uv-cache uv venv .venv312 --python 3.12
+UV_CACHE_DIR=.uv-cache uv pip install --python .venv312/bin/python -r requirements.txt
+```
 
-- FastMCP quickstart: https://gofastmcp.com/v2/getting-started/quickstart
-- FastMCP resources: https://gofastmcp.com/v2/servers/resources
-- MCP Inspector: https://modelcontextprotocol.io/docs/tools/inspector
+Using an existing Python 3.10+ interpreter:
 
-## Client Setup Notes
+```bash
+python -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+```
 
-### Claude Code
+Initialize or reset the SQLite database:
 
-Anthropic documents local JSON config and `claude mcp add` flows here:
+```bash
+.venv312/bin/python implementation/init_db.py
+```
 
-- https://code.claude.com/docs/en/mcp
+The server also creates `implementation/lab.sqlite` automatically if it is missing.
 
-Claude Code supports MCP resources via `@server:resource-uri` references and supports environment variable expansion in `.mcp.json`.
+## Run The Server
+
+```bash
+.venv312/bin/python implementation/mcp_server.py
+```
+
+The default transport is stdio, which is the easiest local workflow for MCP clients.
+
+Run HTTP transport with bearer-token auth:
+
+```bash
+MCP_AUTH_TOKEN=demo-token .venv312/bin/python implementation/mcp_server.py --transport http --host 127.0.0.1 --port 8000 --path /mcp
+```
+
+Run SSE transport with the same auth middleware:
+
+```bash
+MCP_AUTH_TOKEN=demo-token .venv312/bin/python implementation/mcp_server.py --transport sse --host 127.0.0.1 --port 8000
+```
+
+HTTP/SSE clients must send:
+
+```text
+Authorization: Bearer demo-token
+```
+
+Missing tokens return `401`; wrong tokens return `403`. A valid token reaches the FastMCP HTTP/SSE app.
+
+## Tools
+
+### `search`
+
+Search rows with validated filters, selected columns, ordering, limit, and offset.
+
+Example arguments:
+
+```json
+{
+  "table": "students",
+  "filters": [{"column": "cohort", "operator": "=", "value": "A1"}],
+  "columns": ["name", "cohort", "score"],
+  "order_by": "score",
+  "descending": true,
+  "limit": 2,
+  "offset": 0
+}
+```
+
+Supported operators: `=`, `==`, `!=`, `<>`, `<`, `<=`, `>`, `>=`, `like`, `in`.
+
+### `insert`
+
+Insert one row into a known table and return the inserted payload, including generated `id` when present.
+
+Example arguments:
+
+```json
+{
+  "table": "students",
+  "values": {"name": "Linh Tran", "cohort": "C3", "score": 91.25}
+}
+```
+
+### `aggregate`
+
+Run `count`, `avg`, `sum`, `min`, or `max`, with optional filters and grouping.
+
+Example arguments:
+
+```json
+{
+  "table": "students",
+  "metric": "avg",
+  "column": "score",
+  "group_by": "cohort"
+}
+```
+
+## Resources
+
+- `schema://database` returns the full database schema as JSON.
+- `schema://table/{table_name}` returns one validated table schema as JSON.
+
+Example:
+
+```text
+schema://table/students
+```
+
+## Testing And Verification
+
+Run automated tests:
+
+```bash
+.venv312/bin/python -m pytest
+```
+
+Run the end-to-end smoke verification:
+
+```bash
+.venv312/bin/python implementation/verify_server.py
+```
+
+The verification script checks:
+
+- database initialization
+- valid `search`, `insert`, and `aggregate` calls
+- invalid request error handling
+- MCP tool discovery
+- MCP resource discovery
+- MCP resource template discovery
+- MCP schema reads
+- HTTP bearer auth failure and success behavior
+
+Validation failures from MCP tools return a structured payload such as `{"ok": false, "error": "Unknown table: missing"}`.
+
+A saved sample transcript is in [docs/demo-transcript.md](docs/demo-transcript.md).
+
+## MCP Inspector
+
+```bash
+chmod +x implementation/start_inspector.sh
+./implementation/start_inspector.sh
+```
+
+Inspector checklist:
+
+- tools show `search`, `insert`, and `aggregate`
+- resources show `schema://database`
+- resource templates show `schema://table/{table_name}`
+- valid calls return rows
+- invalid calls return clear errors
+
+## Client Examples
+
+Example config files are in [examples](examples).
 
 ### Codex
 
-OpenAI documents Codex MCP setup here:
+Temporary project-local verification:
 
-- https://developers.openai.com/learn/docs-mcp
+```bash
+mkdir -p .codex-local
+CODEX_HOME="$PWD/.codex-local" codex mcp add sqlite-lab -- "$PWD/.venv312/bin/python" "$PWD/implementation/mcp_server.py"
+CODEX_HOME="$PWD/.codex-local" codex mcp list
+```
 
-Codex supports MCP server configuration through the CLI and `~/.codex/config.toml`.
+Expected result: `sqlite-lab` appears with status `enabled`.
+
+Permanent config shape:
+
+```toml
+[mcp_servers.sqlite-lab]
+command = "/ABSOLUTE/PATH/TO/.venv312/bin/python"
+args = ["/ABSOLUTE/PATH/TO/implementation/mcp_server.py"]
+```
+
+### Claude Code
+
+Use [examples/claude.mcp.json](examples/claude.mcp.json), replacing paths with absolute paths for your checkout.
 
 ### Gemini CLI
 
-Gemini CLI has a built-in MCP manager. In the verified local workflow, the simplest path is:
+Command form:
 
 ```bash
-gemini mcp add sqlite-lab /ABSOLUTE/PATH/TO/python /ABSOLUTE/PATH/TO/implementation/mcp_server.py --description "SQLite lab FastMCP server" --timeout 10000
+gemini mcp add sqlite-lab "$PWD/.venv312/bin/python" "$PWD/implementation/mcp_server.py" --description "SQLite lab FastMCP server" --timeout 10000
 gemini mcp list
 ```
 
-Gemini CLI also documents configuration details here:
+Settings fragment: [examples/gemini-settings.json](examples/gemini-settings.json).
 
-- https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/configuration.md
+## PostgreSQL Mode
 
-Expected outcome:
+SQLite is the default. PostgreSQL uses the same MCP tool/resource surface through `PostgreSQLAdapter`.
 
-- the server appears as `Connected`
-- Gemini can discover `search`, `insert`, and `aggregate`
-- a headless smoke test works with `gemini --allowed-mcp-server-names sqlite-lab --yolo -p "..."`
+Install PostgreSQL support:
 
-### Antigravity
+```bash
+.venv312/bin/python -m pip install "psycopg[binary]>=3.2.0"
+```
 
-Antigravity commonly uses an `mcp_config.json` file with a shape similar to Gemini CLI. Verify the current product behavior in your installed version before grading against exact UI steps.
+Run against PostgreSQL:
 
-## Deliverable Checklist
+```bash
+MCP_DB_BACKEND=postgresql \
+DATABASE_URL="postgresql://user:password@localhost:5432/database" \
+.venv312/bin/python implementation/mcp_server.py
+```
 
-- working FastMCP server
-- SQLite database and seed data
-- `search`, `insert`, `aggregate` tools
-- schema resource and schema resource template
-- verification steps
-- automated tests or repeatable verification script
-- client configuration example
-- README with setup and demo steps
-- Inspector startup command or helper script
-- at least one verified Gemini CLI or Claude/Codex client test
+The PostgreSQL adapter validates public-schema tables and columns through `information_schema`, uses `%s` bound parameters, and returns inserted rows with `RETURNING *`.
 
-## Bonus
+## Bonus Verification
 
-Optional bonus:
+Bonus checks are included in the regular test suite:
 
-- add authentication for SSE or HTTP transport
-- support both SQLite and PostgreSQL with the same MCP surface
-- add richer output annotations or pagination
+```bash
+.venv312/bin/python -m pytest implementation/tests/test_bonus.py
+```
+
+That test verifies:
+
+- bearer-token middleware blocks missing and invalid tokens
+- valid bearer tokens pass through
+- the adapter factory returns SQLite and PostgreSQL adapters behind the shared `DatabaseAdapter` protocol
+
+## Demo Tasks
+
+Use these prompts or Inspector calls:
+
+- Search all students in cohort `A1`.
+- Insert a new student.
+- Count rows in `students`.
+- Compute average student score by cohort.
+- Read `schema://database`.
+- Read `schema://table/students`.
+- Try searching table `missing` and confirm the clear validation error.
+
+## Safety Notes
+
+SQL identifiers are accepted only after checking live SQLite schema metadata. User values are passed as bound parameters. Filters and aggregates are restricted to known operators and metrics, and pagination limits are capped at 100 rows.
