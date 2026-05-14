@@ -11,6 +11,7 @@ Use these screenshots as codelab evidence:
 - `09-table-schema-resource.png` - per-table `schema://table/students` resource template is readable.
 - `10-valid-aggregate-call.png` - valid `aggregate` call returns an average score.
 - `11-valid-insert-call.png` - valid `insert` call succeeds with the inserted payload input visible.
+- `12-codex-client-integration.png` - Codex MCP client lists `sqlite-lab` as `enabled`.
 
 The Inspector was launched with:
 
